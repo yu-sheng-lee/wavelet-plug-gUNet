@@ -2,17 +2,17 @@
 
 ### Install
 
-We test the code on PyTorch 1.12.1 + CUDA 11.3 + cuDNN 8.3.2.
+We test the code on PyTorch 2.2.1 + CUDA 11.8 
 
 1. Create a new conda environment
 ```
-conda create -n pt1121 python=3.9
-conda activate pt1121
+conda create -n gunet python=3.11
+conda activate gunet
 ```
 
 2. Install dependencies
 ```
-conda install pytorch=1.12.1 torchvision torchaudio cudatoolkit=11.3 -c pytorch
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
