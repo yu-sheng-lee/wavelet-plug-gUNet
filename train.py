@@ -21,7 +21,7 @@ from models.wavelet import wt_m,iwt_m
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='ll_predict', type=str, help='model name')
-parser.add_argument('--ll_predict_model', default='gunet_ss', type=str, help='model name')
+parser.add_argument('--ll_predict_model', default='gunet_ss', type=str, help='model name of behazing backbone')
 parser.add_argument('--num_workers', default=8, type=int, help='number of workers')
 parser.add_argument('--use_mp', action='store_true', default=True, help='use Mixed Precision')
 parser.add_argument('--use_ddp', action='store_true', default=False, help='use Distributed Data Parallel')
@@ -62,6 +62,17 @@ def reduce_mean(tensor, nprocs):
 	return rt
 
 
+class muiltLoss(nn.Module):
+    def __init__(self):
+        super(muiltLoss, self).__init__()
+        self.criterion1 = nn.MSELoss()
+        self.criterion2 = nn.L1Loss()
+
+    def forward(self, predictions, targets):
+        # Apply a custom weight to the MSE calculation
+        loss = self.criterion1(predictions, targets) + self.criterion2(predictions, targets)
+        return loss
+
 def train(train_loader, network, criterion, optimizer, scaler, frozen_bn=False):
 	losses = AverageMeter()
 
@@ -75,19 +86,25 @@ def train(train_loader, network, criterion, optimizer, scaler, frozen_bn=False):
 		coeffs = sfm(target_img)
 		coeffs_two = sfm(coeffs)
 		coeffs_three = sfm(coeffs_two)
+		label_dwt_list = []
 		ll_label = coeffs[:, [0, 4, 8]]
 		# # ll_scale1_label, ll_scale2_label = net.ll_scale(label)
 		detail_label = coeffs[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
-		# coeffs_1 = sfm(ll_label)
-		# ll_label_1 = coeffs_1[:, [0, 4, 8]]
-		# detail_label_1 = coeffs_1[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
+		coeffs_1 = sfm(ll_label)
+		label_dwt_list.append([ll_label,detail_label])
+		ll_label_1 = coeffs_1[:, [0, 4, 8]]
+		detail_label_1 = coeffs_1[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
+		label_dwt_list.append([ll_label_1, detail_label_1])
 
 		with autocast(args.use_mp):
 			# output = network(source_img)[0]
 			output = network(source_img)
-			if isinstance(output, tuple):
-				output, (ll, detail) = output
-				loss = 0.5 * criterion(output, target_img) + 0.5 * criterion(ll,ll_label) + criterion(detail,detail_label)
+			if isinstance(output, list):
+				output, dwt_list = output
+				loss = criterion(output, target_img)
+				for i in range(len(dwt_list)):
+					# loss += 0.5 * criterion(label_dwt_list[i][0], dwt_list[i][0]) + 0.5 *  criterion(label_dwt_list[i][1], dwt_list[i][1])
+					loss += 0.5 * criterion(label_dwt_list[i][0], dwt_list[i][0])
 			# output,(out) = output
 			# loss = criterion(output, target_img) + criterion(out, coeffs_three)
 			else:
@@ -106,8 +123,10 @@ def train(train_loader, network, criterion, optimizer, scaler, frozen_bn=False):
 
 def valid(val_loader, network):
 	PSNR = AverageMeter()
-	PSNR_LL = AverageMeter()
-	PSNR_DETAILS = AverageMeter()
+	PSNR_LL = []
+	PSNR_DETAILS = []
+	# PSNR_LL = AverageMeter()
+	# PSNR_DETAILS = AverageMeter()
 
 	torch.cuda.empty_cache()
 
@@ -119,46 +138,61 @@ def valid(val_loader, network):
 		coeffs = sfm(target_img)
 		coeffs_two = sfm(coeffs)
 		coeffs_three = sfm(coeffs_two)
+		label_dwt_list = []
 		ll_label = coeffs[:, [0, 4, 8]]
 		# # ll_scale1_label, ll_scale2_label = net.ll_scale(label)
 		detail_label = coeffs[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
-		# coeffs_1 = sfm(ll_label)
-		# ll_label_1 = coeffs_1[:, [0, 4, 8]]
-		# detail_label_1 = coeffs_1[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
+		label_dwt_list.append([ll_label, detail_label])
+		coeffs_1 = sfm(ll_label)
+		ll_label_1 = coeffs_1[:, [0, 4, 8]]
+		detail_label_1 = coeffs_1[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
+		label_dwt_list.append([ll_label_1, detail_label_1])
 
 		with torch.no_grad():
 			H, W = source_img.shape[2:]
 			source_img = pad_img(source_img, network.module.patch_size if hasattr(network.module, 'patch_size') else 64)
 			# output = network(source_img)[0].clamp_(-1, 1)
 			output_map = network(source_img)
-			if isinstance(output_map, tuple):
+			if isinstance(output_map, list):
 				# output,(out) = output
-				output, (ll, detail) = output_map
+				output, dwt_list = output_map
 				output.clamp_(-1, 1)
+				output = output[:, :, :H, :W]
+				for i in range(len(dwt_list)):
+					print(2**(i+1))
+					dwt_list[i][0] = dwt_list[i][0][:, :, :H//2**(i+1), :W//2**(i+1)]
+					dwt_list[i][1] = dwt_list[i][1][:, :, :H//2**(i+1), :W//2**(i+1)]
 			else:
 				output = output_map.clamp_(-1, 1)
-			output = output[:, :, :H, :W]
+				output = output[:, :, :H, :W]
 
 		mse_loss = F.mse_loss(output * 0.5 + 0.5, target_img * 0.5 + 0.5, reduction='none').mean((1, 2, 3))
 		psnr = 10 * torch.log10(1 / mse_loss).mean()
-		if isinstance(output_map, tuple):
-			mse_loss_ll = F.mse_loss(ll, ll_label, reduction='none').mean((1, 2, 3))
-			mse_loss_detail = F.mse_loss(detail, detail_label, reduction='none').mean((1, 2, 3))
-			psnr_ll = 10 * torch.log10(4 / mse_loss_ll).mean()
-			psnr_detail = 10 * torch.log10(4 / mse_loss_detail).mean()
-			PSNR_LL.update(psnr_ll, source_img.size(0))
-			PSNR_DETAILS.update(psnr_detail, source_img.size(0))
+		if isinstance(output_map, list):
+			for i in range(len(dwt_list)):
+				if len(PSNR_LL) < i+1:
+					PSNR_LL.append(AverageMeter())
+					PSNR_DETAILS.append(AverageMeter())
+				mse_loss_ll = F.mse_loss(dwt_list[i][0], label_dwt_list[i][0], reduction='none').mean((1, 2, 3))
+				mse_loss_detail = F.mse_loss(dwt_list[i][1], label_dwt_list[i][1], reduction='none').mean((1, 2, 3))
+				psnr_ll = 10 * torch.log10(4 / mse_loss_ll).mean()
+				psnr_detail = 10 * torch.log10(4 / mse_loss_detail).mean()
+				PSNR_LL[i].update(psnr_ll, source_img.size(0))
+				PSNR_DETAILS[i].update(psnr_detail, source_img.size(0))
 		# if args.use_ddp: psnr = reduce_mean(psnr, dist.get_world_size())		# comment this line for more accurate validation
-
 		PSNR.update(psnr.item(), source_img.size(0))
-	print('PSNR: {:.4f}\nPSNR_LL: {:.4f}\nPSNR_detail: {:.4f}'.format(PSNR.avg, PSNR_LL.avg, PSNR_DETAILS.avg))
+	print('PSNR: {:.4f}'.format(PSNR.avg))
+	for i in range(len(PSNR_LL)):
+		print("PSNR_LL_order_{}: {:.4f}".format(i+1, PSNR_LL[i].avg,))
+		print("PSNR_detail_order_{}: {:.4f}".format(i+1, PSNR_DETAILS[i].avg,))
+
 
 	return PSNR.avg
 
 
 def main():
 	# define network, and use DDP for faster training
-	if args.model == "ll_predict":
+	if "ll_predict" in args.model:
 		model = eval(args.ll_predict_model)()
 		save_dir = os.path.join(args.save_dir, args.exp)
 		train_all = True
@@ -191,12 +225,13 @@ def main():
 	network.eval().cuda()
 	torch_input = torch.randn(1, 3, 640, 512).cuda()
 	flops = FlopCountAnalysis(network, torch_input)
-	print(flops.total() / 1000 / 1000 / 1000)
+	print("GFLOPS:",flops.total() / 1000 / 1000 / 1000)
 	pytorch_total_params = sum(p.numel() for p in network.parameters())
-	print(pytorch_total_params)
+	print("params:",pytorch_total_params)
 
 	# define loss function
-	criterion = nn.MSELoss()
+	criterion = muiltLoss()
+	# criterion = nn.MSELoss()
 	# criterion = nn.L1Loss()
 
 	# define optimizer
@@ -211,12 +246,12 @@ def main():
 	# load saved model
 	save_dir = os.path.join(args.save_dir, args.exp)
 	os.makedirs(save_dir, exist_ok=True)
-	if not os.path.exists(os.path.join(save_dir, args.model+ "_" + args.ll_predict_model +'.pth' if args.model == "ll_predict" else args.model+'.pth')):
+	if not os.path.exists(os.path.join(save_dir, args.model+ "_" + args.ll_predict_model +'.pth' if "ll_predict" in args.model else args.model+'.pth')):
 		best_psnr = 0
 		cur_epoch = 0
 	else:
 		if not args.use_ddp or local_rank == 0: print('==> Loaded existing trained model.')
-		model_info = torch.load(os.path.join(save_dir, args.model+ "_" + args.ll_predict_model +'.pth' if args.model == "ll_predict" else args.model+'.pth'), map_location='cpu')
+		model_info = torch.load(os.path.join(save_dir, args.model+ "_" + args.ll_predict_model +'.pth' if "ll_predict" in args.model else args.model+'.pth'), map_location='cpu')
 		network.load_state_dict(model_info['state_dict'])
 		optimizer.load_state_dict(model_info['optimizer'])
 		lr_scheduler.load_state_dict(model_info['lr_scheduler'])
@@ -286,7 +321,7 @@ def main():
 								'scaler': scaler.state_dict(),
 								'loss':loss_total,
 								'PSNR':PSNR_total,'lr':lr_total},
-							   os.path.join(save_dir, "best_" + args.model+ "_" + args.ll_predict_model +'.pth' if args.model == "ll_predict" else "best_" + args.model+'.pth'))
+							   os.path.join(save_dir, "best_" + args.model+ "_" + args.ll_predict_model +'.pth' if "ll_predict" in args.model else "best_" + args.model+'.pth'))
 				torch.save({'cur_epoch': epoch + 1,
               'best_psnr': best_psnr,
 							'state_dict': network.state_dict(),
@@ -297,7 +332,7 @@ def main():
 							'loss': loss_total,
 							'PSNR': PSNR_total,
 							'lr':lr_total},
-						   os.path.join(save_dir, args.model+ "_" + args.ll_predict_model +'.pth' if args.model == "ll_predict" else args.model+'.pth'))
+						   os.path.join(save_dir, args.model+ "_" + args.ll_predict_model +'.pth' if "ll_predict" in args.model else args.model+'.pth'))
 
 				writer.add_scalar('valid_psnr', avg_psnr, epoch)
 				writer.add_scalar('best_psnr', best_psnr, epoch)

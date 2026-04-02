@@ -1,4 +1,4 @@
 {
-    "batch_size": 64,
-    "lr": 8e-4
+    "batch_size": 192,
+    "lr": 4e-4
 }

@@ -10,45 +10,26 @@ from models.wavelet import wt_m,iwt_m,swt_m
 
 
 class dwt_down(nn.Module):
-	def __init__(self, in_channels):
+	def __init__(self,dim,kernel_size=3,with_hh=False):
 		super().__init__()
-		self.dim = in_channels
+		self.with_hh = with_hh
+		self.dim= dim
 		self.dwt = wt_m(requires_grad=True)
-		# self.conv_lh = nn.Conv2d(in_channels, in_channels, 3, 1, 1, groups=in_channels)
-		self.conv_att = nn.Conv2d(in_channels * 4, in_channels * 4, 3, padding=1)
-
-	# self.conv_hl = nn.Conv2d(in_channels, in_channels, 3, 1, 1, groups=in_channels)
-	# self.conv_lh_att = nn.Conv2d(in_channels*4, in_channels*2, 3, 1, 1)
-	# self.to_att = nn.Sequential(
-	#             nn.Conv2d(in_channels, in_channels, 1, 1, 0),
-	#             nn.Sigmoid()
-	# )
-	# self.pw = nn.Conv2d(in_channels * 4, in_channels, 1, 1, 0)
+		self.conv_lh = nn.Conv2d(dim, dim, kernel_size=kernel_size, padding=kernel_size//2)
+		self.conv_hl = nn.Conv2d(dim, dim, kernel_size=kernel_size, padding=kernel_size//2)
+		self.proj = nn.Conv2d(dim, dim, kernel_size=1)
 
 	def forward(self, X):
 		X = self.dwt(X)
-		ll = X[:, [i * 4 for i in range(self.dim)]]
-		lh = X[:, [i * 4 + 1 for i in range(self.dim)]]
-		hl = X[:, [i * 4 + 2 for i in range(self.dim)]]
-		hh = X[:, [i * 4 + 3 for i in range(self.dim)]]
-		# get attention
-		# lh_out =  self.conv_lh(ll + lh)
-		# hl_out =  self.conv_hl(ll + hl)
-		conv_att = self.conv_att(X)
-		ll_att, lh_att, hl_att, hh_att = conv_att[:, self.dim], conv_att[:, self.dim:self.dim * 2], conv_att[:,
-																									self.dim * 2:self.dim * 3], conv_att[
-																																:,
-																																self.dim * 3:]
-		att_map = ll * hl_att + hl * hl_att + lh * lh_att + hh * hh_att
-		# att_map = self.to_att(lh_out + hl_out)
-		# squeeze
-		# x_s = self.pw(X)
-		# o = torch.mul(x_s, att_map) + x_s
+		ll = X[:,[i*4 for i in range(self.dim)]]
+		lh = X[:,[i*4+1 for i in range(self.dim)]]
+		hl = X[:,[i*4+2 for i in range(self.dim)]]
+		hh = X[:,[i*4+3 for i in range(self.dim)]]
+		lh = self.conv_lh(lh+ll)
+		hl = self.conv_hl(hl+ll)
 		hi_sub = torch.cat([lh, hl, hh], dim=1)
-		# hi_bands = torch.cat([x_lh, x_hl, x_hh], dim=1)
-		# hi_bands = torch.cat([x_lh, x_hl, x_hh], dim=1)
-		# return o, hi_sub
-		return att_map, hi_sub
+		out = self.proj(lh+hl)
+		return out,hi_sub
 
 
 class WaveDownampler(nn.Module):
@@ -58,6 +39,11 @@ class WaveDownampler(nn.Module):
         self.dwt = wt_m(requires_grad=True)
         # self.conv_lh = nn.Conv2d(in_channels, in_channels, 3, 1, 1, groups=in_channels)
         self.conv_att = nn.Conv2d(in_channels*4, in_channels*4, 3,padding = 1)
+        # self.conv_att = nn.Sequential(
+        #     nn.Conv2d(in_channels, in_channels*8,kernel_size=3,padding=1),
+		# 	nn.BatchNorm2d(in_channels*8),
+		# 	nn.Conv2d(in_channels*8, in_channels * 4, kernel_size=3, padding=1),
+        #     nn.MaxPool2d(2,stride=2))
         # self.conv_hl = nn.Conv2d(in_channels, in_channels, 3, 1, 1, groups=in_channels)
         # self.conv_lh_att = nn.Conv2d(in_channels*4, in_channels*2, 3, 1, 1)
         # self.to_att = nn.Sequential(
@@ -67,6 +53,7 @@ class WaveDownampler(nn.Module):
         # self.pw = nn.Conv2d(in_channels * 4, in_channels, 1, 1, 0)
 
     def forward(self, X):
+        # conv_att = self.conv_att(X)
         X = self.dwt(X)
         ll = X[:, [i * 4 for i in range(self.dim)]]
         lh = X[:, [i * 4 + 1 for i in range(self.dim)]]
@@ -100,51 +87,41 @@ class WaveUpsampler(nn.Module):
             nn.Conv2d(in_channels * 4, in_channels * 4, kernel_size=1),
             nn.PixelShuffle(upscale_factor=2)
         )
-        self.att = nn.Conv2d(in_channels*2, in_channels*2, kernel_size=3,padding =1)
-        # self.fusions = nn.Conv2d(in_channels*2, in_channels, kernel_size=3,padding =1)
+        # self.att = nn.Conv2d(in_channels*2, in_channels*2, kernel_size=3,padding =1)
+        self.att = nn.Conv2d(in_channels, in_channels*2, kernel_size=3,padding =1)
+        self.fusions = nn.Conv2d(in_channels*2, in_channels, kernel_size=3,padding =1)
 
-    def forward(self, X,hh_in):
+    def forward(self, X,ll_in,hh_in):
         hh_in = hh_in + self.hi_sub_pre(hh_in)
         idw_in = torch.cat((X,hh_in),dim = 1)[:,[0,3,4,5,1,6,7,8,2,9,10,11]]
         # idwt_out = self.idwt(self.input_conv(idw_in))
         idwt_out = self.idwt(idw_in)
 
         proj_out = self.proj(idw_in)
-        att = self.att(torch.cat((idwt_out,proj_out),dim = 1))
+        # print(10 * torch.log10(1 / F.mse_loss(idwt_out,proj_out)))
+        # att = self.att(torch.cat((idwt_out,proj_out),dim = 1))
+        att = self.att(ll_in)
         att_idwt ,att_proj =  att[:,:self.dim], att[:,self.dim:]
+        # print(torch.mean(att_idwt),torch.mean(att_proj))
         out = idwt_out * att_idwt + proj_out * att_proj
         # return out,idwt_out,out,hh_in
         return out,hh_in
+        # return idwt_out,hh_in
 
 
 class dwt_up(nn.Module):
-	def __init__(self, in_channels):
+	def __init__(self, in_channels, with_hh=False):
 		super().__init__()
 		self.dim = in_channels
 		self.idwt = iwt_m(requires_grad=True)
 		# self.input_conv  = nn.Conv2d(in_channels*4, in_channels*4, kernel_size=3,padding =1)
 		self.hi_sub_pre = nn.Conv2d(in_channels * 3, in_channels * 3, kernel_size=3, padding=1)
-		#
-		# self.proj = nn.Sequential(
-		# 	nn.Conv2d(in_channels * 4, in_channels * 4, kernel_size=1),
-		# 	nn.PixelShuffle(upscale_factor=2)
-		# )
-		# self.att = nn.Conv2d(in_channels * 2, in_channels * 2, kernel_size=3, padding=1)
-
-	# self.fusions = nn.Conv2d(in_channels*2, in_channels, kernel_size=3,padding =1)
 
 	def forward(self, X, hh_in):
 		hh_in = hh_in + self.hi_sub_pre(hh_in)
 		idw_in = torch.cat((X, hh_in), dim=1)[:, [0, 3, 4, 5, 1, 6, 7, 8, 2, 9, 10, 11]]
 		# idwt_out = self.idwt(self.input_conv(idw_in))
 		idwt_out = self.idwt(idw_in)
-
-		# proj_out = self.proj(idw_in)
-		# att = self.att(torch.cat((idwt_out, proj_out), dim=1))
-		# att_idwt, att_proj = att[:, :self.dim], att[:, self.dim:]
-		# out = idwt_out * att_idwt + proj_out * att_proj
-		# return out,idwt_out,out,hh_in
-		# return out, hh_in
 		return idwt_out, hh_in
 
 
@@ -724,7 +701,7 @@ class wv_UNet(nn.Module):
 		return x
 
 
-__all__ = ['gUNet', "gunet_ss",'gunet_t', 'gunet_s', 'gunet_b', 'gunet_d','wavelet','wavelet_gnet','wavedown_gnet_two','wavelet_gnet_two','wavelet_gnet_two_csp','wavelet_gnet_two_endep','wavelet_gnet_two_lite','wavelet_gnet_two_weight','wavelet_wvnet_two','wavelet_gnet_three','wavelet_gnet_three_w',"wavelet_gnet_three_endep","ll_predict","gunet_do_ones"]
+__all__ = ['gUNet', "gunet_ss",'gunet_t', 'gunet_s', 'gunet_b', 'gunet_d','wavelet','wavelet_gnet','wavedown_gnet_two','wavelet_gnet_two','wavelet_gnet_two_csp','wavelet_gnet_two_endep','wavelet_gnet_two_lite','wavelet_gnet_two_weight','wavelet_wvnet_two','wavelet_gnet_three','wavelet_gnet_three_w',"wavelet_gnet_three_endep","ll_predict","ll_predict_lite"]
 
 # Normalization batch size of 16~32 may be good
 def gunet_ss():	# 4 cards 2080Ti
@@ -783,12 +760,16 @@ def wavelet_gnet_three_w():
 def ll_predict(model):
 	return ll_predict_model(model)
 
+def ll_predict_lite(model):
+	return ll_predict_model_lite(model)
+
 
 class UNet_wavelet_gnet(nn.Module):
 	def __init__(self):
 		super(UNet_wavelet_gnet, self).__init__()
 		self.xfm = wt_m(requires_grad=True)
 		self.ifm = iwt_m(requires_grad=True)
+		self.out = False
 		self.encoder = gUNet(in_channel=12,out_channel=12,kernel_size=5, base_dim=24, depths=[1, 1, 1, 2, 1, 1, 1], conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
 	def forward(self,x):
 		x = self.xfm(x)
@@ -804,7 +785,10 @@ class UNet_wavelet_gnet(nn.Module):
 		# recon_B = torch.clamp(recon_B, min=-1, max=1)
 		# output_map = torch.cat((recon_R, recon_G, recon_B), dim=1)
 		# return output_map,(out_ll, out_detail)
-		return output_map
+		if self.out:
+			return output_map
+		else:
+			return [output_map, [[out_ll, out_detail]]]
 
 class UNet_wavelet_gnet_two(nn.Module):
 	def __init__(self,kernel_size=3, base_dim=24, depths=[1, 1, 1, 2, 1, 1, 1]):
@@ -834,27 +818,34 @@ class UNet_wavelet_gnet_two(nn.Module):
 		if self.out:
 			return outmap
 		else:
-			return outmap,(ll, details)
+			return [outmap,[[ll, details]]]
 
 
 class UNet_wavedown_gnet_two(nn.Module):
 	def __init__(self,kernel_size=3, base_dim=24, depths=[1, 1, 1, 2, 1, 1, 1]):
 		super(UNet_wavedown_gnet_two, self).__init__()
 		self.out = True
-		self.dwt_down1 = dwt_down(in_channels=3)
-		self.dwt_down2 = dwt_down(in_channels=3)
-		self.dwt_up1 = dwt_up(3)
-		self.dwt_up2 = dwt_up(3)
+		# self.dwt_down1 = dwt_down(dim=3)
+		self.dwt_down1 = WaveDownampler(in_channels=3)
+		# self.dwt_down2 = dwt_down(dim=3,with_hh=True)
+		self.dwt_down2 = WaveDownampler(in_channels=3)
+		# self.dwt_up1 = dwt_up(3)
+		self.dwt_up1 = WaveUpsampler(3)
+		self.dwt_up2 = WaveUpsampler(3)
+		# self.dwt_up2 = dwt_up(3)
 		self.encoder = gUNet(in_channel=3,out_channel=3,kernel_size=kernel_size, base_dim=base_dim, depths=depths, conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
 		# self.encoder = gUNet_custom(in_channel=48,out_channel=48,kernel_size=5, base_dim=[12,24,24,48,24,24,12], depths=[1, 1, 1, 1,1, 1, 1], conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
 	def forward(self,x):
 		x,hh_1 = self.dwt_down1(x)
 		x,hh_2 = self.dwt_down2(x)
 		out = self.encoder(x)
-		# out_ll = self.dwt_up2(out,hh_2)
-		out_ll,details = self.dwt_up2(out,hh_2)
-		outmap,out_details = self.dwt_up1(out_ll,hh_1)
-		return outmap,(out_ll, out_details)
+		out_ll = self.dwt_up2(out,hh_2)
+		# out_ll,out_hh = self.dwt_up2(out_ll,out_hh)
+		outmap = self.dwt_up1(out_ll,hh_1)
+		if self.out:
+			return outmap
+		else:
+			return [outmap,[[ll, details]]]
 
 class UNet_wavelet_gnet_two_csp(nn.Module):
 	def __init__(self,kernel_size=3, base_dim=24, depths=[1, 1, 1, 2, 1, 1, 1]):
@@ -884,11 +875,12 @@ class UNet_wavelet_gnet_two_csp(nn.Module):
 		if self.out:
 			return outmap
 		else:
-			return outmap,(ll, details)
+			return [outmap, [[ll, details]]]
 
 class WVNet_wavelet_gnet_two(nn.Module):
 	def __init__(self):
 		super(WVNet_wavelet_gnet_two, self).__init__()
+		self.out = False
 		self.xfm = wt_m(requires_grad=True)
 		self.ifm = iwt_m(requires_grad=True)
 		self.encoder = wv_UNet(in_channel=48,out_channel=48,kernel_size=5, base_dim=24, depths=[1, 1, 1, 2, 1, 1, 1], conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
@@ -911,7 +903,10 @@ class WVNet_wavelet_gnet_two(nn.Module):
 		# output_map = torch.cat((recon_R, recon_G, recon_B), dim=1)
 		# return output_map,out_ll,out_detail
 		# return outmap
-		return outmap,(ll, details)
+		if self.out:
+			return outmap
+		else:
+			return [outmap, [[ll, details]]]
 
 
 
@@ -920,6 +915,7 @@ class UNet_wavelet_gnet_three(nn.Module):
 		super(UNet_wavelet_gnet_three, self).__init__()
 		self.xfm = wt_m(requires_grad=True)
 		self.ifm = iwt_m(requires_grad=True)
+		self.out = False
 		self.encoder = gUNet(in_channel=192,out_channel=192,kernel_size=5, base_dim=base_dim, depths=[1, 1, 1, 2, 1, 1, 1], conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
 		# self.encoder = self.encoder = gUNet_custom(in_channel=192,out_channel=192,kernel_size=5, base_dim=[12,24,24,32,24,24,12], depths=[1, 1, 1, 1, 1, 1, 1], conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
 	def forward(self,x):
@@ -929,11 +925,11 @@ class UNet_wavelet_gnet_three(nn.Module):
 		out = self.encoder(x)
 		# out_ll = x[:, [0, 4, 8]]
 		# out_detail = x[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
+		out = self.ifm(out)
+		out = self.ifm(out)
+		ll = out[:, [0, 4, 8]]
+		details = out[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
 		outmap = self.ifm(out)
-		outmap = self.ifm(outmap)
-		# ll = out[:, [0, 4, 8]]
-		# details = out[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
-		outmap = self.ifm(outmap)
 		# recon_R = torch.clamp(recon_R, min=-1, max=1)
 		# recon_G = self.ifm(torch.cat((out_ll[:, [1]], out_detail[:, 3:6]), dim=1))
 		# recon_G = torch.clamp(recon_G, min=-1, max=1)
@@ -941,12 +937,16 @@ class UNet_wavelet_gnet_three(nn.Module):
 		# recon_B = torch.clamp(recon_B, min=-1, max=1)
 		# output_map = torch.cat((recon_R, recon_G, recon_B), dim=1)
 		# return output_map,out_ll,out_detail
-		return outmap
+		if self.out:
+			return outmap
+		else:
+			return [outmap, [[ll, details]]]
 
 
 class UNet_wavelet_gnet_three_endep(nn.Module):
 	def __init__(self,base_dim=24):
 		super(UNet_wavelet_gnet_three_endep, self).__init__()
+		self.out = False
 		self.xfm = wt_m(requires_grad=True)
 		self.ifm = iwt_m(requires_grad=True)
 		self.ll_encoder = gUNet(in_channel=48,out_channel=48,kernel_size=5, base_dim=base_dim, depths=[1, 1, 1, 2, 1, 1, 1], conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
@@ -979,12 +979,16 @@ class UNet_wavelet_gnet_three_endep(nn.Module):
 		# recon_B = torch.clamp(recon_B, min=-1, max=1)
 		outmap = torch.cat((recon_R, recon_G, recon_B), dim=1)
 		# return output_map,out_ll,out_detail
-		return outmap,(out_ll, out_detail)
+		if self.out:
+			return outmap
+		else:
+			return [outmap, [[out_ll, out_detail]]]
 
 
 class UNet_wavelet_gnet_two_endep(nn.Module):
 	def __init__(self,base_dim=24):
 		super(UNet_wavelet_gnet_two_endep, self).__init__()
+		self.out = False
 		self.xfm = wt_m(requires_grad=False)
 		self.ifm = iwt_m(requires_grad=False)
 		self.ll_encoder = gUNet(in_channel=48,out_channel=12,kernel_size=3, base_dim=base_dim, depths=[1,1, 1,2,1, 1, 1], conv_layer=ConvLayer, norm_layer=nn.BatchNorm2d, gate_act=nn.Sigmoid, fusion_layer=SKFusion)
@@ -1009,11 +1013,15 @@ class UNet_wavelet_gnet_two_endep(nn.Module):
 		# recon_B = torch.clamp(recon_B, min=-1, max=1)
 		outmap = torch.cat((recon_R, recon_G, recon_B), dim=1)
 		# return output_map,out_ll,out_detail
-		return outmap,(out_ll, out_detail)
+		if self.out:
+			return outmap
+		else:
+			return [outmap, [[out_ll, out_detail]]]
 		# return outmap
 class UNet_wavelet(nn.Module):
 	def __init__(self,model=gunet_t()):
 		super(UNet_wavelet, self).__init__()
+		self.out = False
 		self.xfm = wt_m(requires_grad=True)
 		self.ifm = iwt_m(requires_grad=True)
 		self.ll_encoder = ll_predict_model(model)
@@ -1031,49 +1039,75 @@ class UNet_wavelet(nn.Module):
 		recon_B = self.ifm(torch.cat((out_ll[:, [2]], out_detail[:, 6:9]), dim=1))
 		recon_B = torch.clamp(recon_B, min=-1, max=1)
 		output_map = torch.cat((recon_R, recon_G, recon_B), dim=1)
-		return output_map,out_ll,out_detail
+		if self.out:
+			return outmap
+		else:
+			return [outmap, [[out_ll, out_detail]]]
 
 	def set_train(self):
 		self.train()
 		self.ll_encoder.set_train()
 
 class ll_predict_model(nn.Module):
-    def __init__(self, model):
-        super(ll_predict_model, self).__init__()
-        self.ll_predict_model = model
-        self.dwt_down1 = WaveDownampler(in_channels=3)
+	def __init__(self, model):
+		super(ll_predict_model, self).__init__()
+		self.ll_predict_model = model
+		self.dwt_down1 = WaveDownampler(in_channels=3)
 		# self.dwt_down2 = dwt_down(dim=3,with_hh=True)
-        self.dwt_down2 = WaveDownampler(in_channels=3)
+		self.dwt_down2 = WaveDownampler(in_channels=3)
 		# self.dwt_up1 = dwt_up(3)
-        self.dwt_up1 = WaveUpsampler(3)
-        self.dwt_up2 = WaveUpsampler(3)
-        self.train_all = True
+		self.dwt_up1 = WaveUpsampler(3)
+		self.dwt_up2 = WaveUpsampler(3)
+		self.train_all = True
+		self.out = False
 
-    def forward(self, x):
-        x,hh_1 = self.dwt_down1(x)
-        x,hh_2 = self.dwt_down2(x)
-        x = self.ll_predict_model(x)
-        out_ll,detail = self.dwt_up2(x,hh_2)
-        out,out_detail = self.dwt_up1(out_ll,hh_1)
+	def forward(self, x):
+		x_1,hh_1 = self.dwt_down1(x)
+		x_2,hh_2 = self.dwt_down2(x_1)
+		x_3 = self.ll_predict_model(x_2)
+		out_ll,detail = self.dwt_up2(x_3,x_1,hh_2)
+		out,out_detail = self.dwt_up1(out_ll,x,hh_1)
 		# x = self.end_embedding(x)
-        return out,(out_ll,out_detail)
+		# return [out,[[out_ll,out_detail]]]
+		if self.out:
+			return out
+		else:
+			return [out,[[out_ll,out_detail],[x_3,detail]]]
 
-    def train(self, mode=True):
-        super().train(mode)
-        if not self.train_all:
-            for param in self.ll_predict_model.parameters():
-                param.requires_grad = False
-
-
-class gUnet_do_ones(nn.Module):
-    def __init__(self):
-        super(gUnet_do_ones, self).__init__()
-        c = 24
-        self.block = BasicLayer(c,c,1)
+	def train(self, mode=True):
+		super().train(mode)
+		if not self.train_all:
+			for param in self.ll_predict_model.parameters():
+				param.requires_grad = False
 
 
-    def forward(self, x):
-        return self.block(x)
+class ll_predict_model_lite(nn.Module):
+	def __init__(self, model):
+		super(ll_predict_model_lite, self).__init__()
+		self.ll_predict_model = model
+		self.dwt_down1 = dwt_down(dim=3)
+		self.dwt_down2 = dwt_down(dim=3)
+		self.dwt_up1 = dwt_up(3)
+		self.dwt_up2 = dwt_up(3)
+		self.train_all = True
+		self.out = False
 
-def gunet_do_ones():
-	return gUnet_do_ones()
+	def forward(self, x):
+		x_1,hh_1 = self.dwt_down1(x)
+		x_2,hh_2 = self.dwt_down2(x_1)
+		x_3 = self.ll_predict_model(x_2)
+		out_ll,detail = self.dwt_up2(x_3,hh_2)
+		out,out_detail = self.dwt_up1(out_ll,hh_1)
+		# x = self.end_embedding(x)
+		# return [out,[[out_ll,out_detail]]]
+		if self.out:
+			return out
+		else:
+			return [out,[[out_ll,out_detail],[x_3,detail]]]
+
+	def train(self, mode=True):
+		super().train(mode)
+		if not self.train_all:
+			for param in self.ll_predict_model.parameters():
+				param.requires_grad = False
+

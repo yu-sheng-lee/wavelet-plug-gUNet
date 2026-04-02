@@ -14,16 +14,15 @@ from models.wavelet import wt_m
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='wavedown_gnet_two', type=str, help='model name')
-parser.add_argument('--ll_predict_model', default='gunet_t', type=str, help='model name')
+parser.add_argument('--model', default='gunet_ss', type=str, help='model name')
+parser.add_argument('--ll_predict_model', default='gunet_ss', type=str, help='model name')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers')
 parser.add_argument('--data_dir', default='/mnt/d/Train Data/dz_data/', type=str, help='path to dataset')
 parser.add_argument('--save_dir', default='./saved_models/', type=str, help='path to models saving')
 parser.add_argument('--result_dir', default='./results/', type=str, help='path to results saving')
-parser.add_argument('--test_set', default='RESIDE-6K/test', type=str, help='test dataset name')
-parser.add_argument('--exp', default='reside-6k', type=str, help='experiment setting')
+parser.add_argument('--test_set', default='RESIDE-OUT/test', type=str, help='test dataset name')
+parser.add_argument('--exp', default='reside-out', type=str, help='experiment setting')
 args = parser.parse_args()
-
 
 def single(save_dir):
 	state_dict = torch.load(save_dir)['state_dict']
@@ -46,11 +45,11 @@ def test(test_loader, network, result_dir):
 
 	network.eval()
 	pytorch_total_params = sum(p.numel() for p in network.parameters())
-	print(pytorch_total_params)
+	print('params:',pytorch_total_params)
 	device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 	input = torch.randn(1, 3, 640, 512).to(device)
 	flops = FlopCountAnalysis(network, input)
-	print(flops.total() / 1000 / 1000 / 1000)
+	print('GFLOPS:',flops.total() / 1000 / 1000 / 1000)
 
 
 	os.makedirs(os.path.join(result_dir, 'imgs'), exist_ok=True)
@@ -66,7 +65,6 @@ def test(test_loader, network, result_dir):
 		with torch.no_grad():
 			coeffs = sfm(target)
 			ll_label = coeffs[:, [0, 4, 8]]
-
 			# ll_scale1_label, ll_scale2_label = net.ll_scale(label)
 			detail_label = coeffs[:, [1, 2, 3, 5, 6, 7, 9, 10, 11]]
 			coeffs_1 = sfm(ll_label)
@@ -78,11 +76,11 @@ def test(test_loader, network, result_dir):
 			# output,(ll,detail) = network(input)
 			output = network(input)
 			ll = None
-			if isinstance(output, tuple):
-				output, (ll, detail) = output
+			if isinstance(output, list):
+				output, out_list = output
 				output.clamp_(-1, 1)
-				ll = ll[:, :, :H_l, :W_l]
-				detail = detail[:, :, :H_l, :W_l]
+				# ll = ll[:, :, :H_l, :W_l]
+				# detail = detail[:, :, :H_l, :W_l]
 			else:
 				output.clamp_(-1, 1)
 
@@ -117,7 +115,7 @@ def test(test_loader, network, result_dir):
 		f_result.write('%s,%.02f,%.03f\n'%(filename, psnr_val, ssim_val))
 
 		out_img = chw_to_hwc(output.detach().cpu().squeeze(0).numpy())
-		# write_img(os.path.join(result_dir, 'imgs', filename), out_img)
+		write_img(os.path.join(result_dir, 'imgs', filename), out_img)
 
 	f_result.close()
 
@@ -155,3 +153,4 @@ def main():
 
 if __name__ == '__main__':
 	main()
+
