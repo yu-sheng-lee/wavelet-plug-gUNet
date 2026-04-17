@@ -14,7 +14,7 @@ from models.wavelet import wt_m
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='gunet_ss', type=str, help='model name')
+parser.add_argument('--model', default='ll_predict_lite', type=str, help='model name')
 parser.add_argument('--ll_predict_model', default='gunet_ss', type=str, help='model name')
 parser.add_argument('--num_workers', default=4, type=int, help='number of workers')
 parser.add_argument('--data_dir', default='/mnt/d/Train Data/dz_data/', type=str, help='path to dataset')
@@ -23,6 +23,7 @@ parser.add_argument('--result_dir', default='./results/', type=str, help='path t
 parser.add_argument('--test_set', default='RESIDE-OUT/test', type=str, help='test dataset name')
 parser.add_argument('--exp', default='reside-out', type=str, help='experiment setting')
 args = parser.parse_args()
+
 
 def single(save_dir):
 	state_dict = torch.load(save_dir)['state_dict']
@@ -45,11 +46,11 @@ def test(test_loader, network, result_dir):
 
 	network.eval()
 	pytorch_total_params = sum(p.numel() for p in network.parameters())
-	print('params:',pytorch_total_params)
+	print(pytorch_total_params)
 	device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 	input = torch.randn(1, 3, 640, 512).to(device)
 	flops = FlopCountAnalysis(network, input)
-	print('GFLOPS:',flops.total() / 1000 / 1000 / 1000)
+	print(flops.total() / 1000 / 1000 / 1000)
 
 
 	os.makedirs(os.path.join(result_dir, 'imgs'), exist_ok=True)
@@ -124,13 +125,13 @@ def test(test_loader, network, result_dir):
 
 
 def main():
-	if args.model == "ll_predict":
+	if "ll_predict" in args.model:
 		model = eval(args.ll_predict_model)()
 		network = eval(args.model)(model)
 	else:
 		network = eval(args.model)()
 	network.cuda()
-	saved_model_dir = os.path.join(args.save_dir, args.exp, "best_" + args.model+ "_" + args.ll_predict_model +'.pth' if args.model == "ll_predict" else "best_" + args.model+'.pth')
+	saved_model_dir = os.path.join(args.save_dir, args.exp, "best_" + args.model+ "_" + args.ll_predict_model +'.pth' if "ll_predict" in args.model  else "best_" + args.model+'.pth')
 	print(saved_model_dir)
 
 	if os.path.exists(saved_model_dir):
@@ -153,4 +154,3 @@ def main():
 
 if __name__ == '__main__':
 	main()
-

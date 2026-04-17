@@ -32,6 +32,8 @@ class dwt_down(nn.Module):
 		return out,hi_sub
 
 
+
+
 class WaveDownampler(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
@@ -75,6 +77,27 @@ class WaveDownampler(nn.Module):
         # return o, hi_sub
         return att_map, hi_sub
 
+class WaveDownampler_gnet(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.dim = in_channels
+        self.dwt = wt_m(requires_grad=True)
+        # self.conv_lh = nn.Conv2d(in_channels, in_channels, 3, 1, 1, groups=in_channels)
+        self.conv_att = nn.Sequential(nn.Conv2d(in_channels*4, 24, 3, padding=1)
+									  ,BasicLayer(net_depth=1,dim=24,depth=1),
+									  nn.Conv2d(24, in_channels, 3, padding=1))
+
+    def forward(self, X):
+        # conv_att = self.conv_att(X)
+        X = self.dwt(X)
+        ll = X[:, [i * 4 for i in range(self.dim)]]
+        lh = X[:, [i * 4 + 1 for i in range(self.dim)]]
+        hl = X[:, [i * 4 + 2 for i in range(self.dim)]]
+        hh = X[:, [i * 4 + 3 for i in range(self.dim)]]
+        att_map  = self.conv_att(X) + ll
+        hi_sub = torch.cat([lh, hl, hh],dim = 1)
+        return att_map, hi_sub
+
 class WaveUpsampler(nn.Module):
     def __init__(self, in_channels,with_hh=False):
         super().__init__()
@@ -88,7 +111,7 @@ class WaveUpsampler(nn.Module):
             nn.PixelShuffle(upscale_factor=2)
         )
         # self.att = nn.Conv2d(in_channels*2, in_channels*2, kernel_size=3,padding =1)
-        self.att = nn.Conv2d(in_channels, in_channels*2, kernel_size=3,padding =1)
+        self.att = nn.Conv2d(in_channels*2, in_channels*2, kernel_size=3,padding =1)
         self.fusions = nn.Conv2d(in_channels*2, in_channels, kernel_size=3,padding =1)
 
     def forward(self, X,ll_in,hh_in):
@@ -99,8 +122,41 @@ class WaveUpsampler(nn.Module):
 
         proj_out = self.proj(idw_in)
         # print(10 * torch.log10(1 / F.mse_loss(idwt_out,proj_out)))
-        # att = self.att(torch.cat((idwt_out,proj_out),dim = 1))
-        att = self.att(ll_in)
+        att = self.att(torch.cat((idwt_out,proj_out),dim = 1))
+        att = self.att(att)
+        att_idwt ,att_proj =  att[:,:self.dim], att[:,self.dim:]
+        # print(torch.mean(att_idwt),torch.mean(att_proj))
+        out = idwt_out * att_idwt + proj_out * att_proj
+        # return out,idwt_out,out,hh_in
+        return out,hh_in
+        # return idwt_out,hh_in
+
+class WaveUpsampler_gnet(nn.Module):
+    def __init__(self, in_channels,with_hh=False):
+        super().__init__()
+        self.dim = in_channels
+        self.idwt = iwt_m(requires_grad=True)
+        # self.input_conv  = nn.Conv2d(in_channels*4, in_channels*4, kernel_size=3,padding =1)
+        self.hi_sub_pre  = nn.Conv2d(in_channels*3, in_channels*3, kernel_size=3,padding =1)
+		#
+        self.proj = nn.Sequential(
+            nn.Conv2d(in_channels * 4, in_channels * 4, kernel_size=1),
+            nn.PixelShuffle(upscale_factor=2)
+        )
+        # self.att = nn.Conv2d(in_channels*2, in_channels*2, kernel_size=3,padding =1)
+        self.att = nn.Conv2d(in_channels*2, in_channels*2, kernel_size=3,padding =1)
+        self.fusions = nn.Conv2d(in_channels*2, in_channels, kernel_size=3,padding =1)
+
+    def forward(self, X,ll_in,hh_in):
+        hh_in = hh_in + self.hi_sub_pre(hh_in)
+        idw_in = torch.cat((X,hh_in),dim = 1)[:,[0,3,4,5,1,6,7,8,2,9,10,11]]
+        # idwt_out = self.idwt(self.input_conv(idw_in))
+        idwt_out = self.idwt(idw_in)
+
+        proj_out = self.proj(idw_in)
+        # print(10 * torch.log10(1 / F.mse_loss(idwt_out,proj_out)))
+        att = self.att(torch.cat((ll_in,proj_out),dim = 1))
+        att = self.att(att)
         att_idwt ,att_proj =  att[:,:self.dim], att[:,self.dim:]
         # print(torch.mean(att_idwt),torch.mean(att_proj))
         out = idwt_out * att_idwt + proj_out * att_proj
@@ -701,7 +757,7 @@ class wv_UNet(nn.Module):
 		return x
 
 
-__all__ = ['gUNet', "gunet_ss",'gunet_t', 'gunet_s', 'gunet_b', 'gunet_d','wavelet','wavelet_gnet','wavedown_gnet_two','wavelet_gnet_two','wavelet_gnet_two_csp','wavelet_gnet_two_endep','wavelet_gnet_two_lite','wavelet_gnet_two_weight','wavelet_wvnet_two','wavelet_gnet_three','wavelet_gnet_three_w',"wavelet_gnet_three_endep","ll_predict","ll_predict_lite"]
+__all__ = ['gUNet', "gunet_ss",'gunet_t', 'gunet_s', 'gunet_b', 'gunet_d','wavelet','wavelet_gnet','wavedown_gnet_two','wavelet_gnet_two','wavelet_gnet_two_csp','wavelet_gnet_two_endep','wavelet_gnet_two_lite','wavelet_gnet_two_weight','wavelet_wvnet_two','wavelet_gnet_three','wavelet_gnet_three_w',"wavelet_gnet_three_endep","ll_predict","ll_predict_gnet","ll_predict_lite"]
 
 # Normalization batch size of 16~32 may be good
 def gunet_ss():	# 4 cards 2080Ti
@@ -759,6 +815,9 @@ def wavelet_gnet_three_w():
 
 def ll_predict(model):
 	return ll_predict_model(model)
+
+def ll_predict_gnet(model):
+	return ll_predict_gnet_model(model)
 
 def ll_predict_lite(model):
 	return ll_predict_model_lite(model)
@@ -1040,9 +1099,9 @@ class UNet_wavelet(nn.Module):
 		recon_B = torch.clamp(recon_B, min=-1, max=1)
 		output_map = torch.cat((recon_R, recon_G, recon_B), dim=1)
 		if self.out:
-			return outmap
+			return output_map
 		else:
-			return [outmap, [[out_ll, out_detail]]]
+			return [output_map, [[out_ll, out_detail]]]
 
 	def set_train(self):
 		self.train()
@@ -1080,6 +1139,37 @@ class ll_predict_model(nn.Module):
 			for param in self.ll_predict_model.parameters():
 				param.requires_grad = False
 
+class ll_predict_gnet_model(nn.Module):
+	def __init__(self, model):
+		super(ll_predict_gnet_model, self).__init__()
+		self.ll_predict_model = model
+		self.dwt_down1 = WaveDownampler_gnet(in_channels=3)
+		# self.dwt_down2 = dwt_down(dim=3,with_hh=True)
+		self.dwt_down2 = WaveDownampler_gnet(in_channels=3)
+		# self.dwt_up1 = dwt_up(3)
+		self.dwt_up1 = WaveUpsampler_gnet(3)
+		self.dwt_up2 = WaveUpsampler_gnet(3)
+		self.train_all = True
+		self.out = False
+
+	def forward(self, x):
+		x_1,hh_1 = self.dwt_down1(x)
+		x_2,hh_2 = self.dwt_down2(x_1)
+		x_3 = self.ll_predict_model(x_2)
+		out_ll,detail = self.dwt_up2(x_3,x_1,hh_2)
+		out,out_detail = self.dwt_up1(out_ll,x,hh_1)
+		# x = self.end_embedding(x)
+		# return [out,[[out_ll,out_detail]]]
+		if self.out:
+			return out
+		else:
+			return [out,[[out_ll,out_detail],[x_3,detail]]]
+
+	def train(self, mode=True):
+		super().train(mode)
+		if not self.train_all:
+			for param in self.ll_predict_model.parameters():
+				param.requires_grad = False
 
 class ll_predict_model_lite(nn.Module):
 	def __init__(self, model):
