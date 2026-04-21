@@ -41,6 +41,32 @@ The final file path should be the same as the following:
     
     └─ ... (dataset name)
 ```
+The weights of Reside-out dataset can be downloaded from the following website.Please unzip the file and place it in the saved_models folder.
+https://drive.google.com/file/d/14IqHDOWIkTExzzlCXLK7NjeU3y_g59IW/view?usp=drive_link
+
+The scores for the Reside-out dataset are shown in the table below.
+
+wavelet:
+
+| Dehazing model | Params(M) | FLOPS(G) | PSNR | SSIM |
+| ---------- | --------- | --------- | --------- | ---------|
+| two oder (wavelet_gnet_two) | 538,256 | 925.29(M) | 32.14 | 0.98 |
+| Three oder (wavelet_gnet_three) | 612,128 | 576.86(M) | 29.08 | 0.97 |
+
+plug(ll_predict)
+
+| Dehazing model | Params(M) | FLOPS(G) | PSNR | SSIM |
+| -------- | ------- | ------- | ------- | --------|
+| gunet_ss | 524,197 | 1.01 | 33.20 | 0.98 |
+| gunet_t | 853,237 | 1.37 |34.38 | 0.9 |
+
+lite plug(ll_predict_lite)
+
+| Dehazing model | Params(M) | FLOPS(G)  | PSNR  | SSIM |
+| -------- | ------- |-----------|-------|------|
+| gunet_ss | 520,639 | 613.42(M) | 31.92 | 0.97 |
+| gunet_t | 849,679 | 979.48(M) | 33.14 | 0.98 |
+
 
 ## Training and Evaluation
 
